@@ -27,10 +27,16 @@ line-length = 88
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "PT"]
 
-[tool.pytest.ini_options]
+[tool.pytest]
 testpaths = ["tests"]
+addopts = ["-ra", "--import-mode=importlib"]
+strict = true
+filterwarnings = ["error"]
+markers = [
+    "integration: tests que usan los .h5 reales de data/",
+]
 
 [dependency-groups]
 dev = [
