@@ -32,6 +32,8 @@ def build_backbone(weights: ResNet50_Weights | None = None) -> nn.Sequential:
 
 
 class SpatialAttention(nn.Module):
+    """CBAM-style spatial attention (paper eq. 2). Keeps the input shape."""
+
     def __init__(self, kernel_size: int = 7) -> None:
         super().__init__()
         self.conv = nn.Conv2d(
@@ -52,6 +54,11 @@ class SpatialAttention(nn.Module):
 
 
 class PoolingFusion(nn.Module):
+    """GAP and GMP, each refined by its own SE block, fused by addition.
+
+    Maps (B, C, H, W) to (B, C).
+    """
+
     def __init__(self, channels: int = 2048, reduction: int = 16) -> None:
         super().__init__()
         self.se_gap = SqueezeExcitation(channels, channels // reduction)
@@ -65,6 +72,8 @@ class PoolingFusion(nn.Module):
 
 
 class EmbeddingHead(nn.Module):
+    """FC -> BN -> L2 normalization. BN bias is frozen, as in SPCL."""
+
     def __init__(self, in_features: int = 2048, embed_dim: int = 2048) -> None:
         super().__init__()
 
@@ -80,6 +89,11 @@ class EmbeddingHead(nn.Module):
 
 
 class CAPF(nn.Module):
+    """Channel attention-based pooling feature fusion (paper Fig. 2).
+
+    Maps (B, C, H, W) to L2-normalized embeddings (B, embed_dim).
+    """
+
     def __init__(
         self, channels: int = 2048, embed_dim: int = 2048, reduction: int = 16
     ) -> None:
@@ -93,6 +107,12 @@ class CAPF(nn.Module):
 
 
 class ReIDModel(nn.Module):
+    """ResNet-50 backbone + CAPF. Returns L2-normalized embeddings.
+
+    Expects ImageNet-normalized input. ``weights=None`` gives random init: pass
+    ``ResNet50_Weights.IMAGENET1K_V1`` for training, as in the paper.
+    """
+
     def __init__(
         self, weights: ResNet50_Weights | None = None, embed_dim: int = 2048
     ) -> None:
