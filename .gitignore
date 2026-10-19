@@ -1,0 +1,37 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments and uv cache
+.venv/
+venv/
+env/
+.uv-cache/
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing, coverage, and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# Keep uv.lock and .python-version tracked for reproducibility.
