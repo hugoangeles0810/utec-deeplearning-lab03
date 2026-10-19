@@ -35,3 +35,8 @@ coverage.xml
 !.env.example
 
 # Keep uv.lock and .python-version tracked for reproducibility.
+
+# Data
+data/testing.h5
+data/training.h5
+data/validation.h5
