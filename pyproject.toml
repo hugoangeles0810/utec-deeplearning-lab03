@@ -5,6 +5,7 @@ description = "UTEC Deep Learning - Lab 03"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "h5py>=3.16.0",
     "matplotlib>=3.11.2",
     "numpy>=2.5.4",
     "torch>=2.14.1",
