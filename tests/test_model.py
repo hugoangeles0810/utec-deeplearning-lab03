@@ -1,12 +1,28 @@
+from pathlib import Path
+
 import pytest
 import torch
+from torchvision.models import ResNet50_Weights
 
-from lab03.model import PoolingFusion, SpatialAttention, build_backbone
+from lab03.model import (
+    CAPF,
+    EmbeddingHead,
+    PoolingFusion,
+    ReIDModel,
+    SpatialAttention,
+    build_backbone,
+)
 
 # Small feature map: SpatialAttention has no channel-dependent parameters, so 16
 # channels exercise the same code path as the 2048 of the real backbone.
 FEATURE_SHAPE = (2, 16, 8, 4)
 CHANNELS = FEATURE_SHAPE[1]
+# Different sizes, so swapped Linear arguments fail loudly.
+IN_FEATURES, EMBED_DIM = 16, 8
+IMAGE_SHAPE = (4, 3, 128, 64)
+
+PRETRAINED = ResNet50_Weights.IMAGENET1K_V1
+PRETRAINED_PATH = Path(torch.hub.get_dir()) / "checkpoints" / Path(PRETRAINED.url).name
 
 
 @pytest.fixture(autouse=True)
@@ -106,3 +122,141 @@ def test_pooling_fusion_trains_both_se_blocks() -> None:
     for name, parameter in fusion.named_parameters():
         assert parameter.grad is not None, name
         assert parameter.grad.abs().sum() > 0, name
+
+
+def test_embedding_head_output_shape() -> None:
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM)
+    x = torch.randn(4, IN_FEATURES)
+
+    out = head(x)
+
+    assert out.shape == (4, EMBED_DIM)
+
+
+@pytest.mark.parametrize("mode", ["train", "eval"])
+def test_embedding_head_outputs_unit_norm(mode: str) -> None:
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM).train(mode == "train")
+    x = torch.randn(4, IN_FEATURES)
+
+    out = head(x)
+
+    torch.testing.assert_close(out.norm(dim=1), torch.ones(4))
+
+
+def test_embedding_head_in_eval_does_not_depend_on_batch() -> None:
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM).eval()
+    x = torch.randn(4, IN_FEATURES)
+
+    alone = head(x[:1])
+    in_batch = head(x)[:1]
+
+    torch.testing.assert_close(alone, in_batch)
+
+
+def test_embedding_head_in_train_depends_on_batch() -> None:
+    # Documents why feature extraction must run in eval mode.
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM).train()
+    x = torch.randn(4, IN_FEATURES)
+
+    small_batch = head(x[:2])[:1]
+    full_batch = head(x)[:1]
+
+    assert not torch.allclose(small_batch, full_batch)
+
+
+def test_embedding_head_trainable_parameters() -> None:
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM)
+
+    trainable = {name for name, p in head.named_parameters() if p.requires_grad}
+
+    # No Linear bias (BN cancels it) and a frozen BN bias, as in SPCL.
+    assert trainable == {"fc.weight", "bnorm.weight"}
+
+
+def test_embedding_head_rejects_single_sample_batch_in_train() -> None:
+    head = EmbeddingHead(IN_FEATURES, EMBED_DIM).train()
+
+    with pytest.raises(ValueError, match="more than 1 value per channel"):
+        head(torch.randn(1, IN_FEATURES))
+
+
+def _weighted_loss(out: torch.Tensor) -> torch.Tensor:
+    # A plain out.sum() can have zero gradient through BN + L2 normalization.
+    return (out * torch.randn_like(out)).sum()
+
+
+def test_capf_returns_unit_norm_embeddings() -> None:
+    capf = CAPF(CHANNELS, EMBED_DIM, reduction=4)
+    x = torch.randn(4, CHANNELS, 8, 4)
+
+    out = capf(x)
+
+    assert out.shape == (4, EMBED_DIM)
+    torch.testing.assert_close(out.norm(dim=1), torch.ones(4))
+
+
+def test_capf_trains_all_submodules() -> None:
+    capf = CAPF(CHANNELS, EMBED_DIM, reduction=4)
+    x = torch.randn(4, CHANNELS, 8, 4)
+
+    _weighted_loss(capf(x)).backward()
+
+    for name, parameter in capf.named_parameters():
+        if parameter.requires_grad:
+            assert parameter.grad is not None, name
+            assert parameter.grad.abs().sum() > 0, name
+
+
+@pytest.mark.parametrize("embed_dim", [2048, 128])
+def test_reid_model_returns_unit_norm_embeddings(embed_dim: int) -> None:
+    model = ReIDModel(embed_dim=embed_dim)
+    x = torch.randn(IMAGE_SHAPE)
+
+    out = model(x)
+
+    assert out.shape == (IMAGE_SHAPE[0], embed_dim)
+    torch.testing.assert_close(out.norm(dim=1), torch.ones(IMAGE_SHAPE[0]))
+
+
+def test_reid_model_in_eval_does_not_depend_on_batch() -> None:
+    model = ReIDModel().eval()
+    x = torch.randn(IMAGE_SHAPE)
+
+    with torch.inference_mode():
+        alone = model(x[:1])
+        in_batch = model(x)[:1]
+
+    torch.testing.assert_close(alone, in_batch)
+
+
+def test_reid_model_trains_backbone_and_capf() -> None:
+    model = ReIDModel()
+    x = torch.randn(IMAGE_SHAPE)
+
+    _weighted_loss(model(x)).backward()
+
+    frozen = {name for name, p in model.named_parameters() if not p.requires_grad}
+    assert frozen == {"capf.head.bnorm.bias"}
+    for name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            assert parameter.grad is not None, name
+            assert parameter.grad.abs().sum() > 0, name
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not PRETRAINED_PATH.exists(),
+    reason=f"{PRETRAINED_PATH.name} not cached; ReIDModel({PRETRAINED}) downloads it",
+)
+def test_reid_model_loads_imagenet_weights() -> None:
+    model = ReIDModel(PRETRAINED).eval()
+    stem_bn = model.backbone[1]
+    assert isinstance(stem_bn, torch.nn.BatchNorm2d)
+
+    with torch.inference_mode():
+        out = model(torch.randn(IMAGE_SHAPE))
+
+    # Random init leaves BN running means at zero; ImageNet statistics do not.
+    assert stem_bn.running_mean is not None
+    assert stem_bn.running_mean.abs().sum() > 0
+    assert out.shape == (IMAGE_SHAPE[0], 2048)
