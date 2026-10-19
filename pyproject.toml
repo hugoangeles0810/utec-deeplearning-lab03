@@ -1,0 +1,38 @@
+[project]
+name = "utec-deeplearning-lab03"
+version = "0.1.0"
+description = "UTEC Deep Learning - Lab 03"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+]
+
+[project.scripts]
+lab03 = "lab03.main:main"
+
+[build-system]
+requires = ["uv_build>=0.11.13,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "lab03"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+]
