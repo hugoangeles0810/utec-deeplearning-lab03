@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import DataLoader
 
+from lab03.data import ReIDEvalDataset
+
 
 @dataclass(frozen=True)
 class ReIDMetrics:
@@ -76,3 +78,27 @@ def compute_cmc_map(
     if not aps:
         raise ValueError("no query has a valid gallery match")
     return ReIDMetrics(float(np.mean(aps)), cmc_sum / len(aps))
+
+
+def evaluate(
+    model: nn.Module,
+    query_loader: DataLoader,
+    gallery_loader: DataLoader,
+    device: torch.device,
+    max_rank: int = 10,
+) -> ReIDMetrics:
+    """Extracts both splits and scores them. Reads pids and cams from the datasets."""
+    q_pids, q_cams = _labels(query_loader)
+    g_pids, g_cams = _labels(gallery_loader)
+
+    query = extract_features(model, query_loader, device)
+    gallery = extract_features(model, gallery_loader, device)
+    dist = pairwise_distance(query, gallery).numpy()
+    return compute_cmc_map(dist, q_pids, g_pids, q_cams, g_cams, max_rank)
+
+
+def _labels(loader: DataLoader) -> tuple[np.ndarray, np.ndarray]:
+    dataset = loader.dataset
+    if not isinstance(dataset, ReIDEvalDataset):
+        raise TypeError(f"expected a ReIDEvalDataset, got {type(dataset).__name__}")
+    return dataset.person_ids, dataset.camera_ids
