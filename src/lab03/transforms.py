@@ -11,6 +11,7 @@ def build_train_transform(
     padding: int = 10,
     erasing_p: float = 0.5,
 ) -> v2.Compose:
+    """Augmentations from SPCL: flip, pad + crop, random erasing."""
     return v2.Compose(
         [
             v2.RandomHorizontalFlip(),
@@ -18,12 +19,13 @@ def build_train_transform(
             v2.RandomCrop(image_size),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(IMAGENET_MEAN, IMAGENET_STD),
-            v2.RandomErasing(erasing_p, value=0),
+            v2.RandomErasing(p=erasing_p, value=0),
         ]
     )
 
 
 def build_eval_transform() -> v2.Compose:
+    """Deterministic: scale to [0, 1] and normalize with ImageNet stats."""
     return v2.Compose(
         [
             v2.ToDtype(torch.float32, scale=True),
@@ -33,6 +35,7 @@ def build_eval_transform() -> v2.Compose:
 
 
 def build_low_res_transform(image_size: tuple[int, int] = IMAGE_SIZE) -> v2.Compose:
+    """Upsamples 32x16 queries to the gallery size before eval normalization."""
     return v2.Compose(
         [
             v2.Resize(
