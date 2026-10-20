@@ -14,8 +14,7 @@ class UnlabeledReIDDataset(torch.utils.data.Dataset):
 
         with h5py.File(self.path, "r") as file:
             self._length = _get_dataset(file, key).shape[0]
-            prefix, sep, _ = key.rpartition("/")
-            camera_ids_key = f"{prefix}{sep}camera_ids"
+            camera_ids_key = _sibling_key(self.key, "camera_ids")
             self.camera_ids = _get_dataset(file, camera_ids_key)[:]
 
         self._file = None
@@ -41,8 +40,21 @@ class UnlabeledReIDDataset(torch.utils.data.Dataset):
         return _get_dataset(self._file, self.key)
 
 
+class ReIDEvalDataset(UnlabeledReIDDataset):
+    def __init__(self, path: Path | str, key: str, transform=None):
+        super().__init__(path, key, transform)
+        with h5py.File(self.path, "r") as file:
+            person_ids_key = _sibling_key(self.key, "person_ids")
+            self.person_ids = _get_dataset(file, person_ids_key)[:]
+
+
 def _get_dataset(file: h5py.File, key: str) -> h5py.Dataset:
     node = file[key]
     if not isinstance(node, h5py.Dataset):
         raise TypeError(f"{key!r} in {file.filename} is not an h5py.Dataset")
     return node
+
+
+def _sibling_key(key: str, name: str) -> str:
+    prefix, sep, _ = key.rpartition("/")
+    return f"{prefix}{sep}{name}"
