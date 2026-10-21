@@ -56,13 +56,16 @@ class SpatialAttention(nn.Module):
 class PoolingFusion(nn.Module):
     """GAP and GMP, each refined by its own SE block, fused by addition.
 
-    Maps (B, C, H, W) to (B, C).
+    ``se=False`` drops both SE blocks (ablation). Maps (B, C, H, W) to (B, C).
     """
 
-    def __init__(self, channels: int = 2048, reduction: int = 16) -> None:
+    def __init__(
+        self, channels: int = 2048, reduction: int = 16, se: bool = True
+    ) -> None:
         super().__init__()
-        self.se_gap = SqueezeExcitation(channels, channels // reduction)
-        self.se_gmp = SqueezeExcitation(channels, channels // reduction)
+        hidden = channels // reduction
+        self.se_gap = SqueezeExcitation(channels, hidden) if se else nn.Identity()
+        self.se_gmp = SqueezeExcitation(channels, hidden) if se else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _avg_pool = F.adaptive_avg_pool2d(x, 1)
@@ -92,18 +95,35 @@ class CAPF(nn.Module):
     """Channel attention-based pooling feature fusion (paper Fig. 2).
 
     Maps (B, C, H, W) to L2-normalized embeddings (B, embed_dim).
+    ``spatial_attention`` and ``se`` switch off each attention (paper Table 5).
     """
 
     def __init__(
-        self, channels: int = 2048, embed_dim: int = 2048, reduction: int = 16
+        self,
+        channels: int = 2048,
+        embed_dim: int = 2048,
+        reduction: int = 16,
+        spatial_attention: bool = True,
+        se: bool = True,
     ) -> None:
         super().__init__()
-        self.attention = SpatialAttention()
-        self.fusion = PoolingFusion(channels, reduction)
+        self.attention = SpatialAttention() if spatial_attention else nn.Identity()
+        self.fusion = PoolingFusion(channels, reduction, se)
         self.head = EmbeddingHead(channels, embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.head(self.fusion(self.attention(x)))
+
+
+class GAPHead(nn.Module):
+    """Baseline without CAPF: global average pooling + embedding head."""
+
+    def __init__(self, channels: int = 2048, embed_dim: int = 2048) -> None:
+        super().__init__()
+        self.head = EmbeddingHead(channels, embed_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(F.adaptive_avg_pool2d(x, 1).flatten(1))
 
 
 class ReIDModel(nn.Module):
@@ -111,14 +131,30 @@ class ReIDModel(nn.Module):
 
     Expects ImageNet-normalized input. ``weights=None`` gives random init: pass
     ``ResNet50_Weights.IMAGENET1K_V1`` for training, as in the paper.
+    ``capf=False`` swaps CAPF for ``GAPHead``, the paper's baseline; the
+    attention flags only apply to CAPF.
     """
 
     def __init__(
-        self, weights: ResNet50_Weights | None = None, embed_dim: int = 2048
+        self,
+        weights: ResNet50_Weights | None = None,
+        embed_dim: int = 2048,
+        capf: bool = True,
+        spatial_attention: bool = True,
+        se: bool = True,
     ) -> None:
         super().__init__()
+        if not capf and not (spatial_attention and se):
+            raise ValueError("spatial_attention and se only apply when capf=True")
         self.backbone = build_backbone(weights)
-        self.capf = CAPF(2048, embed_dim)
+        self.use_capf = capf
+        if capf:
+            self.capf = CAPF(
+                2048, embed_dim, spatial_attention=spatial_attention, se=se
+            )
+        else:
+            self.gap = GAPHead(2048, embed_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.capf(self.backbone(x))
+        neck = self.capf if self.use_capf else self.gap
+        return neck(self.backbone(x))

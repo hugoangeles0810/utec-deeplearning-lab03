@@ -7,6 +7,7 @@ from torchvision.models import ResNet50_Weights
 from lab03.model import (
     CAPF,
     EmbeddingHead,
+    GAPHead,
     PoolingFusion,
     ReIDModel,
     SpatialAttention,
@@ -124,6 +125,16 @@ def test_pooling_fusion_trains_both_se_blocks() -> None:
         assert parameter.grad.abs().sum() > 0, name
 
 
+def test_pooling_fusion_without_se_adds_gap_and_gmp() -> None:
+    fusion = PoolingFusion(CHANNELS, reduction=4, se=False)
+    x = torch.randn(FEATURE_SHAPE)
+
+    out = fusion(x)
+
+    assert list(fusion.parameters()) == []
+    torch.testing.assert_close(out, x.mean(dim=(2, 3)) + x.amax(dim=(2, 3)))
+
+
 def test_embedding_head_output_shape() -> None:
     head = EmbeddingHead(IN_FEATURES, EMBED_DIM)
     x = torch.randn(4, IN_FEATURES)
@@ -207,6 +218,14 @@ def test_capf_trains_all_submodules() -> None:
             assert parameter.grad.abs().sum() > 0, name
 
 
+def test_capf_without_spatial_attention_skips_the_mask() -> None:
+    capf = CAPF(CHANNELS, EMBED_DIM, reduction=4, spatial_attention=False).eval()
+    x = torch.randn(4, CHANNELS, 8, 4)
+
+    assert not any(name.startswith("attention.") for name in capf.state_dict())
+    torch.testing.assert_close(capf(x), capf.head(capf.fusion(x)))
+
+
 @pytest.mark.parametrize("embed_dim", [2048, 128])
 def test_reid_model_returns_unit_norm_embeddings(embed_dim: int) -> None:
     model = ReIDModel(embed_dim=embed_dim)
@@ -241,6 +260,52 @@ def test_reid_model_trains_backbone_and_capf() -> None:
         if parameter.requires_grad:
             assert parameter.grad is not None, name
             assert parameter.grad.abs().sum() > 0, name
+
+
+def test_gap_head_pools_by_average() -> None:
+    head = GAPHead(CHANNELS, EMBED_DIM).eval()
+    x = torch.randn(4, CHANNELS, 8, 4)
+
+    torch.testing.assert_close(head(x), head.head(x.mean(dim=(2, 3))))
+
+
+def test_reid_model_without_capf_is_the_gap_baseline() -> None:
+    model = ReIDModel(capf=False)
+    x = torch.randn(IMAGE_SHAPE)
+
+    out = model(x)
+
+    assert isinstance(model.gap, GAPHead)
+    assert not any(name.startswith("capf.") for name in model.state_dict())
+    torch.testing.assert_close(out.norm(dim=1), torch.ones(IMAGE_SHAPE[0]))
+    frozen = {name for name, p in model.named_parameters() if not p.requires_grad}
+    assert frozen == {"gap.head.bnorm.bias"}
+
+
+@pytest.mark.parametrize(
+    ("spatial_attention", "se", "removed"),
+    [
+        pytest.param(False, True, "capf.attention.", id="no-spatial-attention"),
+        pytest.param(True, False, "capf.fusion.se_", id="no-se"),
+    ],
+)
+def test_reid_model_ablations_drop_their_parameters(
+    spatial_attention: bool, se: bool, removed: str
+) -> None:
+    model = ReIDModel(spatial_attention=spatial_attention, se=se)
+
+    names = set(model.state_dict())
+
+    assert not any(name.startswith(removed) for name in names)
+    assert set(ReIDModel().state_dict()) > names
+
+
+@pytest.mark.parametrize(
+    "flags", [{"spatial_attention": False}, {"se": False}], ids=["spatial", "se"]
+)
+def test_reid_model_attention_flags_require_capf(flags: dict[str, bool]) -> None:
+    with pytest.raises(ValueError, match="only apply when capf=True"):
+        ReIDModel(capf=False, **flags)
 
 
 @pytest.mark.integration

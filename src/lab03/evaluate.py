@@ -19,6 +19,24 @@ class ReIDMetrics:
     def rank(self, k: int) -> float:
         return float(self.cmc[k - 1])
 
+    def summary(self, ranks: tuple[int, ...] = (1, 5, 10)) -> dict[str, float]:
+        """JSON-friendly ``{"mAP": ..., "rank1": ..., ...}``."""
+        return {"mAP": self.mean_ap} | {f"rank{k}": self.rank(k) for k in ranks}
+
+
+@dataclass(frozen=True)
+class MapDrop:
+    """mAP lost when going from ``original`` to ``degraded`` queries."""
+
+    absolute: float  # in mAP units, e.g. 0.12 = 12 points
+    relative: float  # fraction of the original mAP
+
+
+def map_drop(original: ReIDMetrics, degraded: ReIDMetrics) -> MapDrop:
+    # mean_ap > 0 always: every scored query has at least one match in the gallery.
+    absolute = original.mean_ap - degraded.mean_ap
+    return MapDrop(absolute, absolute / original.mean_ap)
+
 
 @torch.inference_mode()
 def extract_features(

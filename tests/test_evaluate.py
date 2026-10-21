@@ -13,6 +13,7 @@ from lab03.evaluate import (
     compute_cmc_map,
     evaluate,
     extract_features,
+    map_drop,
     pairwise_distance,
 )
 
@@ -171,6 +172,22 @@ def test_metrics_rank_reads_cmc() -> None:
 
     assert metrics.rank(1) == 0.25
     assert metrics.rank(3) == 1.0
+
+
+def test_metrics_summary_reports_map_and_ranks() -> None:
+    metrics = ReIDMetrics(mean_ap=0.5, cmc=np.array([0.25, 0.5, 0.5, 0.5, 0.75]))
+
+    assert metrics.summary((1, 5)) == {"mAP": 0.5, "rank1": 0.25, "rank5": 0.75}
+
+
+def test_map_drop_is_absolute_and_relative_to_the_original() -> None:
+    original = ReIDMetrics(mean_ap=0.8, cmc=np.ones(10))
+    degraded = ReIDMetrics(mean_ap=0.6, cmc=np.ones(10))
+
+    drop = map_drop(original, degraded)
+
+    assert drop.absolute == pytest.approx(0.2)
+    assert drop.relative == pytest.approx(0.25)
 
 
 def test_pairwise_distance_is_cosine_distance() -> None:
