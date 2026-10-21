@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 import torch
 
-from lab03.clustering import jaccard_distance
+from lab03.clustering import (
+    PseudoLabels,
+    cluster_dbscan,
+    generate_pseudo_labels,
+    jaccard_distance,
+)
 
 BLOB_SIZE = 10
 NUM_BLOBS = 3
@@ -18,6 +23,12 @@ def _blobs(noise: float = 0.05, dim: int = 16) -> torch.Tensor:
 
 def _random(n: int = 40, dim: int = 16) -> torch.Tensor:
     return torch.randn(n, dim, generator=torch.Generator().manual_seed(0))
+
+
+def _blobs_with_isolated(num_isolated: int = 3, dim: int = 16) -> torch.Tensor:
+    """``_blobs()`` followed by ``num_isolated`` points on unused axes."""
+    isolated = torch.eye(dim)[NUM_BLOBS : NUM_BLOBS + num_isolated]
+    return torch.cat([_blobs(dim=dim), isolated])
 
 
 def test_jaccard_shape_dtype_range() -> None:
@@ -100,3 +111,54 @@ def test_jaccard_rejects_invalid_k(k1: int, k2: int) -> None:
 def test_jaccard_rejects_non_matrix() -> None:
     with pytest.raises(ValueError, match=r"must be \(N, D\)"):
         jaccard_distance(torch.zeros(40))
+
+
+def test_pseudo_labels_stats() -> None:
+    pseudo = PseudoLabels(np.array([0, -1, 1, 0, -1, 2]))
+
+    assert pseudo.num_clusters == 3
+    assert pseudo.num_outliers == 2
+    assert type(pseudo.num_clusters) is int
+    assert type(pseudo.num_outliers) is int
+    np.testing.assert_array_equal(pseudo.inlier_indices, [0, 2, 3, 5])
+
+
+def test_pseudo_labels_all_outliers() -> None:
+    pseudo = PseudoLabels(np.array([-1, -1, -1]))
+
+    assert pseudo.num_clusters == 0
+    assert pseudo.num_outliers == 3
+    assert pseudo.inlier_indices.size == 0
+
+
+def test_generate_pseudo_labels_recovers_blobs() -> None:
+    pseudo = generate_pseudo_labels(_blobs(), k1=BLOB_SIZE - 1, k2=K2)
+    labels = pseudo.labels.reshape(NUM_BLOBS, BLOB_SIZE)
+
+    assert pseudo.num_clusters == NUM_BLOBS
+    assert pseudo.num_outliers == 0
+    assert (labels == labels[:, :1]).all()
+    assert len(set(labels[:, 0])) == NUM_BLOBS
+
+
+def test_generate_pseudo_labels_marks_isolated_points_as_outliers() -> None:
+    pseudo = generate_pseudo_labels(_blobs_with_isolated(), k1=BLOB_SIZE - 1, k2=K2)
+    blob_size = NUM_BLOBS * BLOB_SIZE
+
+    assert pseudo.num_clusters == NUM_BLOBS
+    np.testing.assert_array_equal(pseudo.labels[blob_size:], -1)
+    np.testing.assert_array_equal(pseudo.inlier_indices, np.arange(blob_size))
+
+
+def test_cluster_dbscan_returns_int64_labels() -> None:
+    dist = np.array([[0, 0.1], [0.1, 0]], dtype=np.float32)
+
+    pseudo = cluster_dbscan(dist, min_samples=2)
+
+    assert pseudo.labels.dtype == np.int64
+    np.testing.assert_array_equal(pseudo.labels, [0, 0])
+
+
+def test_cluster_dbscan_rejects_non_square() -> None:
+    with pytest.raises(ValueError, match="dist must be square"):
+        cluster_dbscan(np.zeros((3, 4)))

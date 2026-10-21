@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.cluster import DBSCAN
 
 
 @dataclass(frozen=True)
@@ -13,14 +14,37 @@ class PseudoLabels:
 
     @property
     def num_clusters(self) -> int:
-        return self.labels.max() + 1
+        return int(self.labels.max(initial=-1)) + 1
 
     @property
     def num_outliers(self) -> int:
-        return (self.labels == -1).sum()
+        return int((self.labels == -1).sum())
 
     @property
-    def inlier_indices(self) -> np.ndarray: ...
+    def inlier_indices(self) -> np.ndarray:
+        return np.flatnonzero(self.labels >= 0)
+
+
+def generate_pseudo_labels(
+    features: torch.Tensor,
+    k1: int = 30,
+    k2: int = 6,
+    eps: float = 0.6,
+    min_samples: int = 4,
+) -> PseudoLabels:
+    """Jaccard distance + DBSCAN, with the paper's defaults."""
+    return cluster_dbscan(jaccard_distance(features, k1, k2), eps, min_samples)
+
+
+def cluster_dbscan(
+    dist: np.ndarray, eps: float = 0.6, min_samples: int = 4
+) -> PseudoLabels:
+    """DBSCAN on a precomputed (N, N) distance matrix."""
+    if dist.ndim != 2 or dist.shape[0] != dist.shape[1]:
+        raise ValueError(f"dist must be square, got shape {dist.shape}")
+
+    dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric="precomputed", n_jobs=-1)
+    return PseudoLabels(dbscan.fit_predict(dist).astype(np.int64))
 
 
 @torch.inference_mode()
