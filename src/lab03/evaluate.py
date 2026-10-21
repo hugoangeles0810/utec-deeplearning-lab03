@@ -65,6 +65,56 @@ def pairwise_distance(query: torch.Tensor, gallery: torch.Tensor) -> torch.Tenso
     return (1 - F.normalize(query) @ F.normalize(gallery).T).clamp_(min=0)
 
 
+@dataclass(frozen=True)
+class QueryScores:
+    """Per-query AP and first-hit rank; NaN and -1 for queries without a match."""
+
+    ap: np.ndarray
+    first_hit: np.ndarray  # 0-based rank of the first true match
+
+    @property
+    def valid(self) -> np.ndarray:
+        return self.first_hit >= 0
+
+
+def valid_ranking(
+    row: np.ndarray,
+    q_pid: int,
+    q_cam: int,
+    g_pids: np.ndarray,
+    g_cams: np.ndarray,
+) -> np.ndarray:
+    """Gallery indices by increasing distance, without junk: same id and camera
+    as the query, or id -1."""
+    order = np.argsort(row, kind="stable")
+    pids, cams = g_pids[order], g_cams[order]
+    junk = ((pids == q_pid) & (cams == q_cam)) | (pids == -1)
+    return order[~junk]
+
+
+def score_queries(
+    dist: np.ndarray,
+    q_pids: np.ndarray,
+    g_pids: np.ndarray,
+    q_cams: np.ndarray,
+    g_cams: np.ndarray,
+) -> QueryScores:
+    if dist.shape != (len(q_pids), len(g_pids)):
+        raise ValueError(
+            f"dist has shape {dist.shape}, expected {(len(q_pids), len(g_pids))}"
+        )
+
+    ap = np.full(len(q_pids), np.nan)
+    first_hit = np.full(len(q_pids), -1)
+    for i, (q_pid, q_cam, row) in enumerate(zip(q_pids, q_cams, dist, strict=True)):
+        ranked = valid_ranking(row, q_pid, q_cam, g_pids, g_cams)
+        hits = np.flatnonzero(g_pids[ranked] == q_pid)  # 0-based ranks of matches
+        if len(hits):
+            first_hit[i] = hits[0]
+            ap[i] = (np.arange(1, len(hits) + 1) / (hits + 1)).mean()
+    return QueryScores(ap, first_hit)
+
+
 def compute_cmc_map(
     dist: np.ndarray,
     q_pids: np.ndarray,
@@ -73,29 +123,13 @@ def compute_cmc_map(
     g_cams: np.ndarray,
     max_rank: int = 10,
 ) -> ReIDMetrics:
-    if dist.shape != (len(q_pids), len(g_pids)):
-        raise ValueError(
-            f"dist has shape {dist.shape}, expected {(len(q_pids), len(g_pids))}"
-        )
-
-    cmc_sum = np.zeros(max_rank)
-    aps = []
-    for q_pid, q_cam, row in zip(q_pids, q_cams, dist, strict=True):
-        order = np.argsort(row, kind="stable")
-        pids, cams = g_pids[order], g_cams[order]
-        junk = ((pids == q_pid) & (cams == q_cam)) | (pids == -1)
-        matches = (pids == q_pid)[~junk]
-        if not matches.any():
-            continue
-
-        hits = np.flatnonzero(matches)  # 0-based ranks of the true matches
-        cmc_sum[hits[0] :] += 1
-        precisions = np.arange(1, len(hits) + 1) / (hits + 1)
-        aps.append(precisions.mean())
-
-    if not aps:
+    scores = score_queries(dist, q_pids, g_pids, q_cams, g_cams)
+    if not scores.valid.any():
         raise ValueError("no query has a valid gallery match")
-    return ReIDMetrics(float(np.mean(aps)), cmc_sum / len(aps))
+
+    first_hit = scores.first_hit[scores.valid]
+    cmc = (first_hit[:, None] < np.arange(1, max_rank + 1)).mean(axis=0)
+    return ReIDMetrics(float(scores.ap[scores.valid].mean()), cmc)
 
 
 def evaluate(

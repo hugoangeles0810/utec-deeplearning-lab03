@@ -15,6 +15,8 @@ from lab03.evaluate import (
     extract_features,
     map_drop,
     pairwise_distance,
+    score_queries,
+    valid_ranking,
 )
 
 # Same alias as in conftest.py; conftest is not importable with importlib mode.
@@ -308,3 +310,25 @@ def test_evaluate_rejects_unlabeled_loader_before_extracting(
     # _Failing would raise RuntimeError if features were extracted first.
     with pytest.raises(TypeError, match="expected a ReIDEvalDataset"):
         evaluate(_Failing(), unlabeled, gallery, CPU)
+
+
+def test_score_queries_reports_ap_and_first_hit_per_query() -> None:
+    dist = np.array([[0.1, 0.2, 0.3], [0.3, 0.2, 0.1], [0.1, 0.2, 0.3]])
+    q_pids, g_pids = np.array([1, 2, 9]), np.array([3, 1, 2])
+
+    scores = score_queries(dist, q_pids, g_pids, np.zeros(3), np.ones(3))
+
+    np.testing.assert_array_equal(scores.first_hit, [1, 0, -1])
+    np.testing.assert_allclose(scores.ap[:2], [0.5, 1.0])
+    assert np.isnan(scores.ap[2])
+    np.testing.assert_array_equal(scores.valid, [True, True, False])
+
+
+def test_valid_ranking_drops_junk_and_sorts_by_distance() -> None:
+    row = np.array([0.4, 0.1, 0.3, 0.2])
+    g_pids, g_cams = np.array([1, 1, -1, 2]), np.array([1, 2, 2, 1])
+
+    ranked = valid_ranking(row, q_pid=1, q_cam=2, g_pids=g_pids, g_cams=g_cams)
+
+    # Index 1 shares id and camera with the query, index 2 has id -1.
+    np.testing.assert_array_equal(ranked, [3, 0])

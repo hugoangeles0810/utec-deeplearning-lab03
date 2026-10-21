@@ -29,6 +29,20 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+def split_datasets(
+    path: Path,
+) -> tuple[dict[str, ReIDEvalDataset], ReIDEvalDataset]:
+    """Queries for both conditions ("query", "low_res") and the gallery."""
+    queries = {
+        "query": ReIDEvalDataset(path, "query/images", build_eval_transform()),
+        "low_res": ReIDEvalDataset(
+            path, "query/images_low_resolution", build_low_res_transform()
+        ),
+    }
+    gallery = ReIDEvalDataset(path, "gallery/images", build_eval_transform())
+    return queries, gallery
+
+
 def evaluate_split(
     model: nn.Module,
     path: Path,
@@ -37,13 +51,7 @@ def evaluate_split(
     num_workers: int = 4,
 ) -> dict[str, ReIDMetrics]:
     """Scores the full-size and the low-resolution queries against the gallery."""
-    queries = {
-        "query": ReIDEvalDataset(path, "query/images", build_eval_transform()),
-        "low_res": ReIDEvalDataset(
-            path, "query/images_low_resolution", build_low_res_transform()
-        ),
-    }
-    gallery = ReIDEvalDataset(path, "gallery/images", build_eval_transform())
+    queries, gallery = split_datasets(path)
 
     def loader(dataset: ReIDEvalDataset) -> DataLoader:
         return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
