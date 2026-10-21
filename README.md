@@ -120,6 +120,55 @@ uv run jupyter lab notebooks/analysis.ipynb
 (métricas por época), `last.pt` y `best.pt`. Con `uv run lab03 train --help` se
 listan todos los flags.
 
+### En una GPU de RunPod
+
+[`scripts/runpod.sh`](scripts/runpod.sh) crea un pod, sube el código y los datos,
+instala el mismo entorno de `uv.lock`, entrena y evalúa en test cada línea de
+[`scripts/experiments.txt`](scripts/experiments.txt), trae `runs/` a la máquina
+local y borra el pod.
+
+Requisitos: [`runpodctl`](https://github.com/runpod/runpodctl) ≥ 2.9
+(`brew install runpod/runpodctl/runpodctl`) y `runpodctl doctor`, que guarda la API
+key y registra la clave SSH.
+
+```sh
+# 1. Prueba corta: verifica GPU y entorno, y mide cuánto tarda una época
+EXPERIMENTS=scripts/experiments_smoke.txt scripts/runpod.sh all 1
+
+# 2. Los 5 experimentos, 2 a la vez en la misma GPU
+scripts/runpod.sh all 2
+```
+
+`all` encadena `up → push → start → wait → pull → down`. `up` muestra el precio de
+la GPU y pide confirmación antes de crear el pod. Cada paso también se puede
+correr por separado, por ejemplo para cerrar la laptop mientras entrena:
+
+```sh
+scripts/runpod.sh up && scripts/runpod.sh push && scripts/runpod.sh start 2
+scripts/runpod.sh status         # progreso de cada run
+scripts/runpod.sh logs ahcl      # sigue el log de un run
+scripts/runpod.sh pull           # trae runs/ (sin last.pt; --all lo incluye)
+scripts/runpod.sh down           # borra el pod
+```
+
+> El pod se cobra por segundo hasta `down`. `runpodctl` 3.0.1 no tiene
+> `--terminate-after`, así que ningún pod se borra solo, salvo cuando `all`
+> termina. Si `all` se interrumpe, avisa de que el pod sigue activo.
+
+Los datos se suben por defecto desde `data/` local (unos 700 MB). Con
+`DATA_SOURCE=drive`, el pod los descarga directamente de la carpeta de Google
+Drive con `gdown`, lo que conviene si tu subida es lenta. Si Drive falla (por
+cuota o permisos), se suben los locales. En ambos casos, `push` comprueba que los
+tres `.h5` abran antes de entrenar.
+
+```sh
+DATA_SOURCE=drive scripts/runpod.sh all 2
+```
+
+La cola es reanudable: los runs con `DONE` se omiten al relanzar `start`. Se
+puede cambiar la GPU (`GPU_ID`), el paralelismo (`PARALLEL`) y otras opciones
+con variables de entorno; ver `scripts/runpod.sh` sin argumentos.
+
 ## 6. Resultados
 
 > Pendiente: pegar las tablas de la sección 5 del notebook.
@@ -199,6 +248,10 @@ src/lab03/
 notebooks/
   dataset.ipynb   exploración del dataset
   analysis.ipynb  comparación de runs y análisis de errores
+scripts/
+  runpod.sh       entrenar en un pod de RunPod y traer los resultados
+  pod_queue.sh    cola de experimentos (se ejecuta en el pod)
+  experiments.txt AHCL, modelo base y ablaciones
 tests/            pytest (uv run pytest)
 ```
 

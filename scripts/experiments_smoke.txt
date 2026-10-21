@@ -1,0 +1,2 @@
+# Prueba corta: 2 épocas de 20 iteraciones, validando en cada una.
+smoke --epochs 2 --iters 20 --eval-every 1

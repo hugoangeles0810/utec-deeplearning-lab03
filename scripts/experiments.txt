@@ -1,0 +1,7 @@
+# Experimentos que corre scripts/pod_queue.sh: un run por línea.
+# <nombre> [flags de `lab03 train`]  ->  runs/<nombre>/
+ahcl
+baseline --no-capf --loss-weight 1
+abl_no_sa --no-spatial-attention
+abl_no_se --no-se
+abl_only_ccl --loss-weight 0

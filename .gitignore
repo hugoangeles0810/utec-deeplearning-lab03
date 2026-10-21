@@ -43,3 +43,6 @@ data/validation.h5
 
 # Training checkpoints (lab03 train --out)
 runs/
+
+# RunPod (scripts/runpod.sh)
+.runpod/
