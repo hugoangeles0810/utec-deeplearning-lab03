@@ -40,3 +40,6 @@ coverage.xml
 data/testing.h5
 data/training.h5
 data/validation.h5
+
+# Training checkpoints (lab03 train --out)
+runs/
