@@ -22,10 +22,12 @@ from lab03.main import (
     run_evaluate,
     run_train,
     save_checkpoint,
+    split_datasets,
     summarize,
 )
 from lab03.model import ReIDModel
 from lab03.train import EpochLosses, EpochStats, TrainConfig
+from lab03.transforms import IMAGE_SIZE
 
 # Same alias as in conftest.py; conftest is not importable with importlib mode.
 type MakeH5 = Callable[..., Path]
@@ -55,7 +57,13 @@ def test_train_defaults_follow_the_paper() -> None:
     assert (args.k1, args.k2) == (TrainConfig.k1, TrainConfig.k2)
     assert args.eps == TrainConfig.eps
     assert args.min_samples == TrainConfig.min_samples
-    assert model_args(args) == {"capf": True, "spatial_attention": True, "se": True}
+    assert model_args(args) == {
+        "capf": True,
+        "spatial_attention": True,
+        "se": True,
+        "identity_attention": False,
+        "balanced_fusion": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -67,9 +75,24 @@ def test_train_defaults_follow_the_paper() -> None:
     ],
 )
 def test_ablation_flags_disable_one_component(flag: str, disabled: str) -> None:
+    default = model_args(build_parser().parse_args(["train"]))
     args = build_parser().parse_args(["train", flag])
 
-    assert {k for k, on in model_args(args).items() if not on} == {disabled}
+    assert model_args(args) == default | {disabled: False}
+
+
+@pytest.mark.parametrize(
+    ("flag", "enabled"),
+    [
+        ("--identity-attention", "identity_attention"),
+        ("--balanced-fusion", "balanced_fusion"),
+    ],
+)
+def test_capf_fix_flags_enable_one_fix(flag: str, enabled: str) -> None:
+    default = model_args(build_parser().parse_args(["train"]))
+    args = build_parser().parse_args(["train", flag])
+
+    assert model_args(args) == default | {enabled: True}
 
 
 def test_hyperparameter_flags_are_parsed() -> None:
@@ -82,9 +105,17 @@ def test_hyperparameter_flags_are_parsed() -> None:
     assert (args.k1, args.k2, args.min_samples) == (20, 4, 3)
 
 
-def test_attention_ablations_require_capf() -> None:
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--no-capf", "--no-se"],
+        ["--no-capf", "--balanced-fusion"],
+        ["--no-spatial-attention", "--identity-attention"],
+    ],
+)
+def test_incompatible_model_flags_are_rejected(flags: list[str]) -> None:
     with pytest.raises(SystemExit):
-        main(["train", "--no-capf", "--no-se"])
+        main(["train", *flags])
 
 
 def test_evaluate_defaults_to_testing_split() -> None:
@@ -169,9 +200,10 @@ def test_checkpoint_rebuilds_the_saved_variant(tmp_path: Path) -> None:
     model = ReIDModel(**margs).eval()
     save_checkpoint(model, margs, tmp_path / "model.pt")
 
-    loaded, loaded_args = load_checkpoint(tmp_path / "model.pt")
+    loaded, loaded_args, image_size = load_checkpoint(tmp_path / "model.pt")
 
     assert loaded_args == margs
+    assert image_size == IMAGE_SIZE
     assert not loaded.use_capf
     x = torch.randn(2, 3, 128, 64)
     with torch.inference_mode():
@@ -181,10 +213,27 @@ def test_checkpoint_rebuilds_the_saved_variant(tmp_path: Path) -> None:
 def test_checkpoint_loads_a_bare_state_dict(tmp_path: Path) -> None:
     torch.save(ReIDModel().state_dict(), tmp_path / "old.pt")
 
-    loaded, loaded_args = load_checkpoint(tmp_path / "old.pt")
+    loaded, loaded_args, image_size = load_checkpoint(tmp_path / "old.pt")
 
     assert loaded_args == {}
     assert loaded.use_capf
+    assert image_size == IMAGE_SIZE
+
+
+def test_checkpoint_keeps_the_training_image_size(tmp_path: Path) -> None:
+    save_checkpoint(ReIDModel(), {}, tmp_path / "model.pt", image_size=(256, 128))
+
+    _, _, image_size = load_checkpoint(tmp_path / "model.pt")
+
+    assert image_size == (256, 128)
+
+
+def test_parser_reads_the_image_size() -> None:
+    parser = build_parser()
+
+    assert parser.parse_args(["train"]).image_size == list(IMAGE_SIZE)
+    args = parser.parse_args(["train", "--image-size", "256", "128"])
+    assert args.image_size == [256, 128]
 
 
 def test_evaluate_split_scores_both_query_resolutions(make_h5: MakeH5) -> None:
@@ -199,6 +248,15 @@ def test_evaluate_split_scores_both_query_resolutions(make_h5: MakeH5) -> None:
     # Constant images keep their value after upsampling, so both rankings agree.
     np.testing.assert_allclose(results["low_res"].cmc, results["query"].cmc)
     assert results["low_res"].mean_ap == pytest.approx(results["query"].mean_ap)
+
+
+def test_split_datasets_resize_every_image_to_the_model_size(make_h5: MakeH5) -> None:
+    path = make_h5({"query": 2, "gallery": 3}, person_ids=True, low_res_shape=(3, 2, 1))
+
+    queries, gallery = split_datasets(path, image_size=(256, 128))
+
+    for dataset in [*queries.values(), gallery]:
+        assert dataset[0][0].shape == (3, 256, 128)
 
 
 def test_run_evaluate_writes_metrics_json(make_h5: MakeH5, tmp_path: Path) -> None:

@@ -49,7 +49,8 @@ GDOWN_VERSION=6.4.2
 # Prepended to every remote script: uv and its caches live on the volume.
 # shellcheck disable=SC2016 # $HOME and $PATH expand on the pod
 REMOTE_ENV='export PATH="$HOME/.local/bin:$PATH"'"
-export UV_CACHE_DIR=$POD_WORKSPACE/.uv-cache UV_PYTHON_INSTALL_DIR=$POD_WORKSPACE/.uv-python"
+export UV_CACHE_DIR=$POD_WORKSPACE/.uv-cache UV_PYTHON_INSTALL_DIR=$POD_WORKSPACE/.uv-python
+export UV_HTTP_TIMEOUT=${UV_HTTP_TIMEOUT:-300}" # torch wheels time out at 30s
 
 die() {
     echo "error: $*" >&2

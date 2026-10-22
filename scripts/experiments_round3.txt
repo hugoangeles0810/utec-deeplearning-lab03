@@ -1,0 +1,7 @@
+# Tercera ronda: CAPF corregido (atención espacial desde la identidad y GAP/GMP
+# normalizados), con la ablación de cada corrección.
+# <nombre> [flags de `lab03 train`]  ->  runs/<nombre>/
+capf_fix --identity-attention --balanced-fusion
+capf_fix_a1 --identity-attention --balanced-fusion --loss-weight 1
+capf_fix_id --identity-attention
+capf_fix_bal --balanced-fusion

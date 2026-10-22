@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from lab03.train import TrainConfig
+from lab03.transforms import IMAGE_SIZE
 
 # TrainConfig fields exposed as CLI flags; the rest never change between runs.
 TUNED = ("lr", "loss_weight", "k1", "k2", "eps", "min_samples")
@@ -71,11 +72,18 @@ def describe(config: dict[str, Any]) -> str:
         parts.append("sin atención espacial")
     if not model["se"]:
         parts.append("sin SE")
+    if model.get("identity_attention"):  # absent in older runs
+        parts.append("atención desde identidad")
+    if model.get("balanced_fusion"):
+        parts.append("GAP/GMP normalizados")
     defaults = {f.name: f.default for f in fields(TrainConfig)}
     for name in TUNED:
         value = config["train"][name]
         if value != defaults[name]:
             parts.append(f"{'a' if name == 'loss_weight' else name}={value:g}")
+    height, width = config.get("image_size", IMAGE_SIZE)  # absent in older runs
+    if (height, width) != IMAGE_SIZE:
+        parts.append(f"{height}x{width}")
     return ", ".join(parts) or "AHCL (paper)"
 
 

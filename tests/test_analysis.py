@@ -75,6 +75,21 @@ def test_describe_attention_ablations(flag: str, label: str) -> None:
     assert describe(_config(AHCL | {flag: False})) == label
 
 
+def test_describe_shows_the_capf_fixes() -> None:
+    model = AHCL | {"identity_attention": True, "balanced_fusion": True}
+
+    label = describe(_config(model))
+
+    assert label == "atención desde identidad, GAP/GMP normalizados"
+
+
+def test_describe_shows_a_non_native_image_size() -> None:
+    config = _config(loss_weight=1.0) | {"image_size": [256, 128]}
+
+    assert describe(config) == "a=1, 256x128"
+    assert describe(config | {"image_size": [128, 64]}) == "a=1"
+
+
 def test_load_runs_skips_directories_without_history(tmp_path: Path) -> None:
     _write_run(tmp_path, "b", [None, 0.4])
     _write_run(tmp_path, "a", [0.3])

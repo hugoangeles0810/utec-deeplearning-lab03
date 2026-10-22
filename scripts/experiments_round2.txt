@@ -1,0 +1,5 @@
+# Segunda ronda: separa el efecto de la pérdida y de la resolución de entrada.
+# <nombre> [flags de `lab03 train`]  ->  runs/<nombre>/
+ahcl_256 --image-size 256 128
+baseline_256 --no-capf --loss-weight 1 --image-size 256 128
+baseline_a05 --no-capf --loss-weight 0.5

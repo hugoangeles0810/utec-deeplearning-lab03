@@ -66,6 +66,30 @@ def test_transform_returns_float_image_of_model_size(
     assert out.shape == (3, *IMAGE_SIZE)
 
 
+@pytest.mark.parametrize(
+    "build", [build_train_transform, build_eval_transform, build_low_res_transform]
+)
+def test_transforms_resize_to_the_requested_size(
+    build: Callable[..., Callable[[torch.Tensor], torch.Tensor]],
+) -> None:
+    out = build(image_size=(256, 128))(_random_image())
+
+    assert out.shape == (3, 256, 128)
+
+
+def test_eval_transform_upsamples_like_pil_bicubic() -> None:
+    image = _random_image()
+    upsampled = [
+        np.asarray(Image.fromarray(channel.numpy()).resize((128, 256), Image.BICUBIC))
+        for channel in image
+    ]
+    expected = _normalize(torch.from_numpy(np.stack(upsampled)))
+
+    out = build_eval_transform((256, 128))(image)
+
+    torch.testing.assert_close(out, expected, rtol=0, atol=1.01 / 255 / STD.min())
+
+
 def test_eval_transform_scales_and_normalizes_with_imagenet_stats() -> None:
     image = _random_image()
 

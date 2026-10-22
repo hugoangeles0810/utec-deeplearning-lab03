@@ -67,14 +67,34 @@ def test_spatial_attention_mask_is_shared_across_channels() -> None:
     torch.testing.assert_close(mask, mask[:, :1].expand_as(mask))
 
 
-def test_spatial_attention_conv_receives_gradients() -> None:
-    attention = SpatialAttention()
+@pytest.mark.parametrize("identity_init", [False, True])
+def test_spatial_attention_conv_receives_gradients(identity_init: bool) -> None:
+    attention = SpatialAttention(identity_init=identity_init)
     x = torch.randn(FEATURE_SHAPE)
 
     attention(x).sum().backward()
 
     assert attention.conv.weight.grad is not None
     assert attention.conv.weight.grad.abs().sum() > 0
+
+
+def test_spatial_attention_identity_init_starts_as_identity() -> None:
+    attention = SpatialAttention(identity_init=True)
+    x = torch.randn(FEATURE_SHAPE)
+
+    torch.testing.assert_close(attention(x), x)
+
+
+def test_spatial_attention_identity_init_mask_lies_in_0_2() -> None:
+    attention = SpatialAttention(identity_init=True)
+    with torch.no_grad():
+        attention.conv.weight.normal_(std=0.5)
+    x = torch.rand(FEATURE_SHAPE) + 0.1
+
+    mask = attention(x) / x
+
+    assert ((mask > 0) & (mask < 2)).all()
+    assert (mask > 1).any()
 
 
 @pytest.mark.parametrize(
@@ -133,6 +153,17 @@ def test_pooling_fusion_without_se_adds_gap_and_gmp() -> None:
 
     assert list(fusion.parameters()) == []
     torch.testing.assert_close(out, x.mean(dim=(2, 3)) + x.amax(dim=(2, 3)))
+
+
+def test_balanced_pooling_fusion_weighs_gap_and_gmp_equally() -> None:
+    fusion = PoolingFusion(CHANNELS, reduction=4, se=False, balanced=True)
+    x = torch.randn(FEATURE_SHAPE)
+
+    out = fusion(x)
+
+    gap = torch.nn.functional.normalize(x.mean(dim=(2, 3)), dim=1)
+    gmp = torch.nn.functional.normalize(x.amax(dim=(2, 3)), dim=1)
+    torch.testing.assert_close(out, gap + gmp)
 
 
 def test_embedding_head_output_shape() -> None:
@@ -301,11 +332,36 @@ def test_reid_model_ablations_drop_their_parameters(
 
 
 @pytest.mark.parametrize(
-    "flags", [{"spatial_attention": False}, {"se": False}], ids=["spatial", "se"]
+    "flags",
+    [
+        {"spatial_attention": False},
+        {"se": False},
+        {"identity_attention": True},
+        {"balanced_fusion": True},
+    ],
+    ids=["spatial", "se", "identity", "balanced"],
 )
-def test_reid_model_attention_flags_require_capf(flags: dict[str, bool]) -> None:
+def test_reid_model_capf_flags_require_capf(flags: dict[str, bool]) -> None:
     with pytest.raises(ValueError, match="only apply when capf=True"):
         ReIDModel(capf=False, **flags)
+
+
+def test_identity_attention_requires_spatial_attention() -> None:
+    with pytest.raises(ValueError, match="requires spatial_attention"):
+        CAPF(
+            CHANNELS,
+            EMBED_DIM,
+            reduction=4,
+            spatial_attention=False,
+            identity_attention=True,
+        )
+
+
+def test_capf_fixes_keep_the_parameters() -> None:
+    # Checkpoints of the fixed model load into the same state-dict layout.
+    fixed = ReIDModel(identity_attention=True, balanced_fusion=True)
+
+    assert set(fixed.state_dict()) == set(ReIDModel().state_dict())
 
 
 @pytest.mark.integration

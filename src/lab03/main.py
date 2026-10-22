@@ -15,6 +15,7 @@ from lab03.evaluate import MapDrop, ReIDMetrics, evaluate, map_drop
 from lab03.model import ReIDModel
 from lab03.train import EpochStats, TrainConfig, train
 from lab03.transforms import (
+    IMAGE_SIZE,
     build_eval_transform,
     build_low_res_transform,
     build_train_transform,
@@ -30,16 +31,18 @@ def get_device() -> torch.device:
 
 
 def split_datasets(
-    path: Path,
+    path: Path, image_size: tuple[int, int] = IMAGE_SIZE
 ) -> tuple[dict[str, ReIDEvalDataset], ReIDEvalDataset]:
-    """Queries for both conditions ("query", "low_res") and the gallery."""
+    """Queries for both conditions ("query", "low_res") and the gallery, all
+    resized to the model input ``image_size``."""
+    eval_transform = build_eval_transform(image_size)
     queries = {
-        "query": ReIDEvalDataset(path, "query/images", build_eval_transform()),
+        "query": ReIDEvalDataset(path, "query/images", eval_transform),
         "low_res": ReIDEvalDataset(
-            path, "query/images_low_resolution", build_low_res_transform()
+            path, "query/images_low_resolution", build_low_res_transform(image_size)
         ),
     }
-    gallery = ReIDEvalDataset(path, "gallery/images", build_eval_transform())
+    gallery = ReIDEvalDataset(path, "gallery/images", eval_transform)
     return queries, gallery
 
 
@@ -49,9 +52,10 @@ def evaluate_split(
     device: torch.device,
     batch_size: int = 256,
     num_workers: int = 4,
+    image_size: tuple[int, int] = IMAGE_SIZE,
 ) -> dict[str, ReIDMetrics]:
     """Scores the full-size and the low-resolution queries against the gallery."""
-    queries, gallery = split_datasets(path)
+    queries, gallery = split_datasets(path, image_size)
 
     def loader(dataset: ReIDEvalDataset) -> DataLoader:
         return DataLoader(dataset, batch_size=batch_size, num_workers=num_workers)
@@ -102,22 +106,41 @@ def model_args(args: argparse.Namespace) -> dict[str, bool]:
         "capf": args.capf,
         "spatial_attention": args.spatial_attention,
         "se": args.se,
+        "identity_attention": args.identity_attention,
+        "balanced_fusion": args.balanced_fusion,
     }
 
 
-def save_checkpoint(model: nn.Module, args: dict[str, Any], path: Path) -> None:
-    """Saves the weights with the ``ReIDModel`` arguments needed to rebuild it."""
-    torch.save({"model_args": args, "state_dict": model.state_dict()}, path)
+def save_checkpoint(
+    model: nn.Module,
+    args: dict[str, Any],
+    path: Path,
+    image_size: tuple[int, int] = IMAGE_SIZE,
+) -> None:
+    """Saves the weights with the ``ReIDModel`` arguments needed to rebuild it
+    and the input size it was trained on."""
+    torch.save(
+        {
+            "model_args": args,
+            "image_size": list(image_size),
+            "state_dict": model.state_dict(),
+        },
+        path,
+    )
 
 
-def load_checkpoint(path: Path) -> tuple[ReIDModel, dict[str, Any]]:
-    """Rebuilds the model saved by ``save_checkpoint``, on CPU."""
+def load_checkpoint(
+    path: Path,
+) -> tuple[ReIDModel, dict[str, Any], tuple[int, int]]:
+    """Rebuilds the model saved by ``save_checkpoint``, on CPU. Returns it with
+    its ``ReIDModel`` arguments and input size (``IMAGE_SIZE`` if not saved)."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if "state_dict" not in checkpoint:  # bare state dict: default ReIDModel
         checkpoint = {"model_args": {}, "state_dict": checkpoint}
     model = ReIDModel(**checkpoint["model_args"])
     model.load_state_dict(checkpoint["state_dict"])
-    return model, checkpoint["model_args"]
+    height, width = checkpoint.get("image_size", IMAGE_SIZE)
+    return model, checkpoint["model_args"], (height, width)
 
 
 def run_train(args: argparse.Namespace) -> None:
@@ -137,14 +160,25 @@ def run_train(args: argparse.Namespace) -> None:
     )
     train_path = args.data_dir / "training.h5"
     val_path = args.data_dir / "validation.h5"
-    train_set = UnlabeledReIDDataset(train_path, transform=build_train_transform())
-    cluster_set = UnlabeledReIDDataset(train_path, transform=build_eval_transform())
+    height, width = args.image_size
+    image_size = (height, width)
+    train_set = UnlabeledReIDDataset(
+        train_path, transform=build_train_transform(image_size)
+    )
+    cluster_set = UnlabeledReIDDataset(
+        train_path, transform=build_eval_transform(image_size)
+    )
     margs = model_args(args)
     model = ReIDModel(weights=ResNet50_Weights.IMAGENET1K_V1, **margs)
     args.out.mkdir(parents=True, exist_ok=True)
     write_json(
         args.out / "config.json",
-        {"model": margs, "train": asdict(config), "seed": args.seed},
+        {
+            "model": margs,
+            "image_size": list(image_size),
+            "train": asdict(config),
+            "seed": args.seed,
+        },
     )
     best_map = -1.0
     last_metrics: dict[str, ReIDMetrics] = {}
@@ -152,7 +186,9 @@ def run_train(args: argparse.Namespace) -> None:
 
     def validate(model: nn.Module) -> ReIDMetrics:
         nonlocal last_metrics
-        last_metrics = evaluate_split(model, val_path, device, num_workers=args.workers)
+        last_metrics = evaluate_split(
+            model, val_path, device, num_workers=args.workers, image_size=image_size
+        )
         return last_metrics["query"]
 
     def on_epoch(stats: EpochStats) -> None:
@@ -165,7 +201,7 @@ def run_train(args: argparse.Namespace) -> None:
             f"instance={losses.instance:.3f})",
             flush=True,
         )
-        save_checkpoint(model, margs, args.out / "last.pt")
+        save_checkpoint(model, margs, args.out / "last.pt", image_size)
         validation = None if stats.metrics is None else last_metrics
         history.append(epoch_record(stats, validation))
         write_json(args.out / "history.json", history)
@@ -177,7 +213,7 @@ def run_train(args: argparse.Namespace) -> None:
         print(f"  val {format_drop(drop)}", flush=True)
         if stats.metrics.mean_ap > best_map:
             best_map = stats.metrics.mean_ap
-            save_checkpoint(model, margs, args.out / "best.pt")
+            save_checkpoint(model, margs, args.out / "best.pt", image_size)
 
     print(f"training on {device}, {len(train_set)} images", flush=True)
     train(model, train_set, cluster_set, device, config, validate, on_epoch)
@@ -185,10 +221,12 @@ def run_train(args: argparse.Namespace) -> None:
 
 def run_evaluate(args: argparse.Namespace) -> None:
     device = get_device()
-    model, margs = load_checkpoint(args.checkpoint)
+    model, margs, image_size = load_checkpoint(args.checkpoint)
     model.to(device)
     path = args.data_dir / f"{args.split}.h5"
-    results = evaluate_split(model, path, device, num_workers=args.workers)
+    results = evaluate_split(
+        model, path, device, num_workers=args.workers, image_size=image_size
+    )
     for name, metrics in results.items():
         print(f"{args.split} {format_metrics(name, metrics)}")
     print(f"{args.split} {format_drop(map_drop(results['query'], results['low_res']))}")
@@ -202,6 +240,7 @@ def run_evaluate(args: argparse.Namespace) -> None:
             "checkpoint": str(args.checkpoint),
             "split": args.split,
             "model": margs,
+            "image_size": list(image_size),
             **summarize(results),
         },
     )
@@ -222,6 +261,14 @@ def build_parser() -> argparse.ArgumentParser:
     train_cmd.add_argument("--eval-every", type=int, default=TrainConfig.eval_every)
     train_cmd.add_argument("--workers", type=int, default=TrainConfig.num_workers)
     train_cmd.add_argument("--seed", type=int, default=0)
+    train_cmd.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=list(IMAGE_SIZE),
+        metavar=("H", "W"),
+        help="model input size; images are resized to it (paper: 256 128)",
+    )
 
     hparams = train_cmd.add_argument_group("hyperparameters (tune on validation)")
     hparams.add_argument("--lr", type=float, default=TrainConfig.lr)
@@ -247,6 +294,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-spatial-attention", dest="spatial_attention", action="store_false"
     )
     ablation.add_argument("--no-se", dest="se", action="store_false")
+    fixes = train_cmd.add_argument_group("CAPF fixes (not in the paper)")
+    fixes.add_argument(
+        "--identity-attention",
+        action="store_true",
+        help="start the spatial attention as the identity (mask = 2 sigmoid(0))",
+    )
+    fixes.add_argument(
+        "--balanced-fusion",
+        action="store_true",
+        help="L2-normalize GAP and GMP before adding them",
+    )
     train_cmd.set_defaults(run=run_train)
 
     eval_cmd = commands.add_parser("evaluate", help="score a checkpoint")
@@ -268,9 +326,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "train" and not args.capf:
-        if not (args.spatial_attention and args.se):
-            parser.error("--no-spatial-attention and --no-se require CAPF")
+    if args.command == "train":
+        try:
+            ReIDModel.check_flags(**model_args(args))
+        except ValueError as error:
+            parser.error(str(error))
     args.run(args)
 
 
