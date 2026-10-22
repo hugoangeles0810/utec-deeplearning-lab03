@@ -32,7 +32,7 @@ def build_backbone(weights: ResNet50_Weights | None = None) -> nn.Sequential:
 
 
 class SpatialAttention(nn.Module):
-    """CBAM-style spatial attention (paper eq. 2). Keeps the input shape.
+    """SAM, the spatial attention module (paper eq. 2). Keeps the input shape.
 
     ``identity_init`` (not in the paper) zeroes the conv and doubles the mask, so
     the module starts as the identity instead of reweighting the pretrained
