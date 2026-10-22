@@ -36,11 +36,14 @@ class SpatialAttention(nn.Module):
 
     ``identity_init`` (not in the paper) zeroes the conv and doubles the mask, so
     the module starts as the identity instead of reweighting the pretrained
-    features at random, and can still learn masks in (0, 2).
+    features at random, and can still learn masks in (0, 2). ``kernel_size``
+    must be odd, so the padding keeps the shape; the paper uses 7.
     """
 
     def __init__(self, kernel_size: int = 7, identity_init: bool = False) -> None:
         super().__init__()
+        if kernel_size < 1 or kernel_size % 2 == 0:
+            raise ValueError(f"kernel_size must be odd and positive, got {kernel_size}")
         self.conv = nn.Conv2d(
             in_channels=2,
             out_channels=1,
@@ -114,7 +117,8 @@ class CAPF(nn.Module):
 
     Maps (B, C, H, W) to L2-normalized embeddings (B, embed_dim).
     ``spatial_attention`` and ``se`` switch off each attention (paper Table 5);
-    ``identity_attention`` and ``balanced_fusion`` are our fixes, off by default.
+    ``identity_attention``, ``balanced_fusion`` and ``sam_kernel`` are our
+    fixes, off by default.
     """
 
     def __init__(
@@ -126,12 +130,15 @@ class CAPF(nn.Module):
         se: bool = True,
         identity_attention: bool = False,
         balanced_fusion: bool = False,
+        sam_kernel: int = 7,
     ) -> None:
         super().__init__()
         if identity_attention and not spatial_attention:
             raise ValueError("identity_attention requires spatial_attention")
+        if sam_kernel != 7 and not spatial_attention:
+            raise ValueError("sam_kernel requires spatial_attention")
         self.attention = (
-            SpatialAttention(identity_init=identity_attention)
+            SpatialAttention(sam_kernel, identity_init=identity_attention)
             if spatial_attention
             else nn.Identity()
         )
@@ -171,10 +178,11 @@ class ReIDModel(nn.Module):
         se: bool = True,
         identity_attention: bool = False,
         balanced_fusion: bool = False,
+        sam_kernel: int = 7,
     ) -> None:
         super().__init__()
         self.check_flags(
-            capf, spatial_attention, se, identity_attention, balanced_fusion
+            capf, spatial_attention, se, identity_attention, balanced_fusion, sam_kernel
         )
         self.backbone = build_backbone(weights)
         self.use_capf = capf
@@ -186,6 +194,7 @@ class ReIDModel(nn.Module):
                 se=se,
                 identity_attention=identity_attention,
                 balanced_fusion=balanced_fusion,
+                sam_kernel=sam_kernel,
             )
         else:
             self.gap = GAPHead(2048, embed_dim)
@@ -197,15 +206,20 @@ class ReIDModel(nn.Module):
         se: bool = True,
         identity_attention: bool = False,
         balanced_fusion: bool = False,
+        sam_kernel: int = 7,
     ) -> None:
         """Raises ``ValueError`` for flag combinations that make no sense."""
         capf_flags_set = not (spatial_attention and se) or (
-            identity_attention or balanced_fusion
+            identity_attention or balanced_fusion or sam_kernel != 7
         )
         if not capf and capf_flags_set:
             raise ValueError("the CAPF flags only apply when capf=True")
         if identity_attention and not spatial_attention:
             raise ValueError("identity_attention requires spatial_attention")
+        if sam_kernel != 7 and not spatial_attention:
+            raise ValueError("sam_kernel requires spatial_attention")
+        if sam_kernel < 1 or sam_kernel % 2 == 0:
+            raise ValueError(f"sam_kernel must be odd and positive, got {sam_kernel}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         neck = self.capf if self.use_capf else self.gap

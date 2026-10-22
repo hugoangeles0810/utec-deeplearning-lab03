@@ -63,6 +63,7 @@ def test_train_defaults_follow_the_paper() -> None:
         "se": True,
         "identity_attention": False,
         "balanced_fusion": False,
+        "sam_kernel": 7,
     }
 
 
@@ -95,6 +96,13 @@ def test_capf_fix_flags_enable_one_fix(flag: str, enabled: str) -> None:
     assert model_args(args) == default | {enabled: True}
 
 
+def test_sam_kernel_flag_sets_the_kernel_size() -> None:
+    default = model_args(build_parser().parse_args(["train"]))
+    args = build_parser().parse_args(["train", "--sam-kernel", "3"])
+
+    assert model_args(args) == default | {"sam_kernel": 3}
+
+
 def test_hyperparameter_flags_are_parsed() -> None:
     argv = ["train", "--lr", "1e-4", "--loss-weight", "1", "--eps", "0.5"]
     argv += ["--k1", "20", "--k2", "4", "--min-samples", "3"]
@@ -111,6 +119,8 @@ def test_hyperparameter_flags_are_parsed() -> None:
         ["--no-capf", "--no-se"],
         ["--no-capf", "--balanced-fusion"],
         ["--no-spatial-attention", "--identity-attention"],
+        ["--no-spatial-attention", "--sam-kernel", "3"],
+        ["--sam-kernel", "4"],
     ],
 )
 def test_incompatible_model_flags_are_rejected(flags: list[str]) -> None:

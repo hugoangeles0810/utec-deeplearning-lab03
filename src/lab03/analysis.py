@@ -76,6 +76,8 @@ def describe(config: dict[str, Any]) -> str:
         parts.append("atención desde identidad")
     if model.get("balanced_fusion"):
         parts.append("GAP/GMP normalizados")
+    if (kernel := model.get("sam_kernel", 7)) != 7:  # absent in older runs
+        parts.append(f"SAM {kernel}x{kernel}")
     defaults = {f.name: f.default for f in fields(TrainConfig)}
     for name in TUNED:
         value = config["train"][name]

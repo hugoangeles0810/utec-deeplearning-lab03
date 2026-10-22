@@ -1,0 +1,5 @@
+# Cuarta ronda: kernel 3×3 en el SAM. Con entrada 128×64 el mapa es 8×4 y el
+# kernel 7×7 ve sobre todo padding (notebooks/attention.ipynb). Repite
+# capf_fix_id cambiando solo --sam-kernel.
+# <nombre> [flags de `lab03 train`]  ->  runs/<nombre>/
+capf_fix_id_k3 --identity-attention --sam-kernel 3

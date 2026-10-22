@@ -100,7 +100,7 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def model_args(args: argparse.Namespace) -> dict[str, bool]:
+def model_args(args: argparse.Namespace) -> dict[str, bool | int]:
     """``ReIDModel`` keyword arguments selected by the train flags."""
     return {
         "capf": args.capf,
@@ -108,6 +108,7 @@ def model_args(args: argparse.Namespace) -> dict[str, bool]:
         "se": args.se,
         "identity_attention": args.identity_attention,
         "balanced_fusion": args.balanced_fusion,
+        "sam_kernel": args.sam_kernel,
     }
 
 
@@ -304,6 +305,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--balanced-fusion",
         action="store_true",
         help="L2-normalize GAP and GMP before adding them",
+    )
+    fixes.add_argument(
+        "--sam-kernel",
+        type=int,
+        default=7,
+        metavar="K",
+        help="odd kernel size of the spatial attention conv (paper: 7)",
     )
     train_cmd.set_defaults(run=run_train)
 

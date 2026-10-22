@@ -83,6 +83,13 @@ def test_describe_shows_the_capf_fixes() -> None:
     assert label == "atención desde identidad, GAP/GMP normalizados"
 
 
+def test_describe_shows_a_non_default_sam_kernel() -> None:
+    label = describe(_config(AHCL | {"sam_kernel": 3}))
+
+    assert label == "SAM 3x3"
+    assert describe(_config(AHCL | {"sam_kernel": 7})) == "AHCL (paper)"
+
+
 def test_describe_shows_a_non_native_image_size() -> None:
     config = _config(loss_weight=1.0) | {"image_size": [256, 128]}
 

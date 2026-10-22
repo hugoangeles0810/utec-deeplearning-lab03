@@ -49,6 +49,24 @@ def test_spatial_attention_keeps_shape() -> None:
     assert out.shape == x.shape
 
 
+def test_spatial_attention_kernel_size_sets_the_conv() -> None:
+    attention = SpatialAttention(kernel_size=3)
+    x = torch.randn(FEATURE_SHAPE)
+
+    out = attention(x)
+
+    assert attention.conv.weight.shape == (1, 2, 3, 3)
+    assert out.shape == x.shape
+
+
+@pytest.mark.parametrize("kernel_size", [0, 4])
+def test_spatial_attention_rejects_kernels_that_change_the_shape(
+    kernel_size: int,
+) -> None:
+    with pytest.raises(ValueError, match="odd and positive"):
+        SpatialAttention(kernel_size=kernel_size)
+
+
 def test_spatial_attention_mask_lies_in_unit_interval() -> None:
     attention = SpatialAttention()
     x = torch.rand(FEATURE_SHAPE) + 0.1  # positive, so out / x recovers the mask
@@ -338,10 +356,11 @@ def test_reid_model_ablations_drop_their_parameters(
         {"se": False},
         {"identity_attention": True},
         {"balanced_fusion": True},
+        {"sam_kernel": 3},
     ],
-    ids=["spatial", "se", "identity", "balanced"],
+    ids=["spatial", "se", "identity", "balanced", "sam-kernel"],
 )
-def test_reid_model_capf_flags_require_capf(flags: dict[str, bool]) -> None:
+def test_reid_model_capf_flags_require_capf(flags: dict[str, bool | int]) -> None:
     with pytest.raises(ValueError, match="only apply when capf=True"):
         ReIDModel(capf=False, **flags)
 
@@ -355,6 +374,23 @@ def test_identity_attention_requires_spatial_attention() -> None:
             spatial_attention=False,
             identity_attention=True,
         )
+
+
+def test_sam_kernel_requires_spatial_attention() -> None:
+    with pytest.raises(ValueError, match="requires spatial_attention"):
+        ReIDModel(spatial_attention=False, sam_kernel=3)
+
+
+def test_reid_model_rejects_an_even_sam_kernel() -> None:
+    with pytest.raises(ValueError, match="odd and positive"):
+        ReIDModel(sam_kernel=4)
+
+
+def test_reid_model_sam_kernel_sets_the_attention_conv() -> None:
+    model = ReIDModel(sam_kernel=3)
+
+    assert model.capf.attention.conv.weight.shape == (1, 2, 3, 3)
+    assert ReIDModel().capf.attention.conv.weight.shape == (1, 2, 7, 7)
 
 
 def test_capf_fixes_keep_the_parameters() -> None:
